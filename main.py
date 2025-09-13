@@ -114,7 +114,7 @@ def search():
     heappush(heap, (-uplift_base, id, query))
 
     best_uplift = uplift_base
-    for _ in range(100):
+    for _ in range(1_000):
         _, _, q = heappop(heap)
         for sub_seg, q_new in sub_segments(
                 segment=get_segment(df, q),

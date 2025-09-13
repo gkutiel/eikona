@@ -130,6 +130,7 @@ def search():
 
             if best_uplift < up:
                 print(q_new, f'Best Uplift: {up:.2%}')
+                best_uplift = up
 
             heappush(heap, (-up, id, q_new))
 

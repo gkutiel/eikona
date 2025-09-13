@@ -1,8 +1,9 @@
-
 from heapq import heappop, heappush
 from typing import cast
 
+import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 target = 'click'
 decision = 'site_category'
@@ -32,24 +33,62 @@ features = set([
     'wday'])
 
 
+def get_segment(df: pd.DataFrame, query: dict[str, int]):
+    mask = pd.Series([True] * len(df))
+
+    for k, v in query.items():
+        mask &= df[k] == v
+
+    return df[mask]
+
+
+def pval(segment: pd.DataFrame, cat: str):
+    """
+    Compute p-value for the given segment.
+    """
+    return 0.0
+
+
+MIN_CAT_SIZE = 30
+
+
 def uplift(segment: pd.DataFrame):
     ctr_base = segment[target].mean()
+    assert ctr_base > 0, "No clicks in segment"
 
-    group_ctrs = segment.groupby(decision)[target].mean()
+    ups = [0]
+    for cat in segment[decision].unique():
+        mask = segment[decision] == cat
+        if sum(mask) < MIN_CAT_SIZE or sum(~mask) < MIN_CAT_SIZE:
+            continue
 
-    cat = group_ctrs.idxmax()
-    max_ctr = group_ctrs[cat]
+        ctr_new = segment[mask][target].mean()
+        if ctr_new < ctr_base:
+            continue
 
-    return (max_ctr / ctr_base - 1), cat
+        ctr_rest = segment[~mask][target].mean()
+        assert ctr_rest < ctr_new
+
+        zc = (
+            ctr_new - ctr_rest) / np.sqrt(
+            ctr_base * (1 - ctr_base) * (1/sum(mask) + 1/sum(~mask)))
+
+        pval = 2 * (1 - norm.cdf(abs(zc)))
+
+        if pval < 0.05:
+            ups.append(ctr_new / ctr_base - 1)
+
+    return max(ups)
 
 
-def sub_segments(*,
-                 segment: pd.DataFrame,
-                 query: dict[str, int]):
+def sub_segments(
+        *,
+        segment: pd.DataFrame,
+        query: dict[str, int]):
 
     cols = features - set(query.keys())
     for col in cols:
-        for v, g in segment.groupby(col):
+        for v, g in segment.groupby(col, observed=True):
             q = query.copy()
             q[col] = cast(int, v)
             yield g, q
@@ -57,23 +96,28 @@ def sub_segments(*,
 
 def search():
     df = pd.read_csv('train.csv', nrows=10_000)
+    df = df[[target, decision] + list(features)]
 
     # optimize memory
     for col in df.columns:
+        if col == target:
+            continue
+
         df[col] = df[col].astype("category")
 
     heap = []
     query = {}
-    uplift_base, cat = uplift(df)
+    uplift_base = uplift(df)
+    print('Base uplift:', uplift_base)
 
     id = 0
-    heappush(heap, (-uplift_base, id, df, query))
+    heappush(heap, (-uplift_base, id, query))
 
     best_uplift = uplift_base
-    while heap:
-        _, _, seg, q = heappop(heap)
+    for _ in range(100):
+        _, _, q = heappop(heap)
         for sub_seg, q_new in sub_segments(
-                segment=seg,
+                segment=get_segment(df, q),
                 query=q):
 
             if len(sub_seg) < len(df) * 0.1:
@@ -82,12 +126,12 @@ def search():
 
             # Found a new segment
             id += 1
-            up, cat = uplift(sub_seg)
-            if best_uplift < up:
-                best_uplift = up
-                print(q, f'Best Uplift: {up:.2%} by {cat}')
+            up = uplift(sub_seg)
 
-            heappush(heap, (-up, id, sub_seg, q_new))
+            if best_uplift < up:
+                print(q_new, f'Best Uplift: {up:.2%}')
+
+            heappush(heap, (-up, id, q_new))
 
 
 if __name__ == "__main__":
